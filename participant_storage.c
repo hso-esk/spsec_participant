@@ -43,8 +43,8 @@ signed char participant_storage_load_all(Participant *participant_ptr) {
     // Load key
     uint8_t key[32];
     if (nvol_storage_read_key(key_path, key) == 0) {
-      // Load key ID first if available
-      uint32_t key_id = (uint32_t)SPSEC_KEY_ID_RESERVED;
+      // Load key ID first if available; default to selector index i if key ID file absent
+      uint32_t key_id = (uint32_t)i;
       nvol_storage_read_key_id(keyid_path, &key_id);
 
       if (participant_ptr->comm_keys.spsec_keys[i] == NULL) {

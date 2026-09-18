@@ -88,10 +88,11 @@ static spsec_ret_t init_participant_config(Participant *participant_ptr,
   participant_ptr->timesync.last_successful = 0;
   participant_ptr->timesync.refresh_interval_us =
       60000000ULL; // Default: 60 seconds
-  // Default sync-restart recovery wait window (30s, 3x the broadcast interval)
+  // Default sync-restart recovery wait window (30s).
   participant_ptr->timesync.broadcast_wait_us = 30000000ULL;
   participant_ptr->timesync.csalt_generated = false;
   participant_ptr->timesync.csalt_regen_mode = SPSEC_CSALT_REGEN_POWER_UP;
+  participant_ptr->timesync.broadcast_high_watermark = 0;
 
   // Heartbeat parameters
   participant_ptr->heartbeat.timing = SPSEC_HEARTBEAT_8S;
@@ -102,7 +103,8 @@ static spsec_ret_t init_participant_config(Participant *participant_ptr,
   memset(participant_ptr->heartbeat.last_received, 0,
          sizeof(participant_ptr->heartbeat.last_received));
 
-  participant_ptr->timesync.broadcast_interval_us = 10000000; // 10 seconds
+  participant_ptr->timesync.broadcast_interval_us =
+      10000000; // 10 seconds (paper v2 SS586/SS601/SS717 default)
   participant_ptr->timesync.last_broadcast = 0;
 
   // Session and state parameters
@@ -264,29 +266,30 @@ static spsec_ret_t load_salt(Participant *participant_ptr,
   return SPSEC_SUCCESS;
 }
 
-// Load all mandatory and optional keys/salts for the participant.
+// Load keys/salts for the participant.
 static spsec_ret_t load_participant_keys(Participant *participant_ptr,
                                          const char *keys_file_ptr) {
-  int ret = 0;
+  int keys_loaded = 0;
 
-  // Load required keys and salts
-  if (load_key(participant_ptr, keys_file_ptr, "provisioning_key", 1) < 0)
-    ret = -1;
-  if (load_salt(participant_ptr, keys_file_ptr, "provisioning_salt", 1) < 0)
-    ret = -1;
-  if (load_key(participant_ptr, keys_file_ptr, "integrator_key", 2) < 0)
-    ret = -1;
-  if (load_salt(participant_ptr, keys_file_ptr, "integrator_salt", 2) < 0)
-    ret = -1;
-
-  // Load optional seed key and salt
-  if (load_key(participant_ptr, keys_file_ptr, "seed_key", 3) < 0 ||
-      load_salt(participant_ptr, keys_file_ptr, "seed_salt", 3) < 0) {
-    LOG_WARNING(logger_name_ptr,
-                "Seed key or salt missing, configuration may be incomplete");
+  // Provisioning key & salt (added manually by device manufacturer)
+  if (load_key(participant_ptr, keys_file_ptr, "provisioning_key", 1) == 0) {
+    keys_loaded++;
+    load_salt(participant_ptr, keys_file_ptr, "provisioning_salt", 1);
   }
 
-  return (spsec_ret_t)ret;
+  // Integrator key & salt (optional at startup, can be provisioned later)
+  if (load_key(participant_ptr, keys_file_ptr, "integrator_key", 2) == 0) {
+    keys_loaded++;
+    load_salt(participant_ptr, keys_file_ptr, "integrator_salt", 2);
+  }
+
+  // Seed key & salt (optional at startup)
+  if (load_key(participant_ptr, keys_file_ptr, "seed_key", 3) == 0) {
+    keys_loaded++;
+    load_salt(participant_ptr, keys_file_ptr, "seed_salt", 3);
+  }
+
+  return (keys_loaded > 0) ? SPSEC_SUCCESS : SPSEC_ERROR_KEY_LOAD_FAILED;
 }
 
 // Init the crypto context: bind backend, pick a supported AEAD algorithm.
@@ -401,13 +404,19 @@ static spsec_ret_t
 init_participant_storage_and_keys(Participant *participant_ptr, uint32_t id,
                                   const char *keys_file_ptr, bool use_bin_storage) {
   const char *storage_path_ptr = getenv("SPSEC_STORAGE_PATH");
-  if (!storage_path_ptr) {
-    storage_path_ptr = "./spsec_data"; // Default storage path
+  if (!storage_path_ptr || storage_path_ptr[0] == '\0') {
+    storage_path_ptr = "./participants_data"; // Default storage path
   }
 
   char dynamic_storage_path[256];
-  snprintf(dynamic_storage_path, sizeof(dynamic_storage_path), "%s_%u",
-           storage_path_ptr, id);
+  size_t len = strlen(storage_path_ptr);
+  if (len > 0 && storage_path_ptr[len - 1] == '/') {
+    snprintf(dynamic_storage_path, sizeof(dynamic_storage_path), "%s%u",
+             storage_path_ptr, id);
+  } else {
+    snprintf(dynamic_storage_path, sizeof(dynamic_storage_path), "%s/%u",
+             storage_path_ptr, id);
+  }
 
   if (nvol_storage_init(dynamic_storage_path, use_bin_storage) < 0) {
     LOG_ERROR(logger_name_ptr, "Failed to initialize storage at '%s'",
@@ -432,6 +441,7 @@ init_participant_storage_and_keys(Participant *participant_ptr, uint32_t id,
       for (uint8_t i = 1; i <= 3; i++) {
         if (participant_ptr->comm_keys.spsec_keys[i]) {
           participant_storage_save_key(participant_ptr, i);
+          participant_storage_save_key_id(participant_ptr, i);
         }
         if (participant_ptr->comm_keys.spsec_salt[i]) {
           participant_storage_save_salt(participant_ptr, i);
@@ -535,7 +545,8 @@ spsec_ret_t participant_init(Participant *participant_ptr, uint32_t id,
                     spsec_tick_ns_for_data_bitrate(
                         participant_ptr->state_info.can_fd_bitrate.rates.data_bitrate));
 
-  // Clamp the acceptance window to the timestamp reconstruction bound
+  // Clamp the acceptance window to the timestamp reconstruction bound.
+  // Only known once tick_ns is set above - see spsec_max_accept_window_ticks().
   {
     uint32_t max_window_ticks = spsec_max_accept_window_ticks(
         timer_get_tick_ns(&participant_ptr->timer));

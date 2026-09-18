@@ -53,8 +53,9 @@ register_validate_key_installation_sequence(Participant *participant_ptr,
   // Map register to key index and key ID register
   switch (reg) {
   case SPSEC_REG_PROVISIONING_KEY:
-    key_index = 1;
-    break;
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key cannot be written via protocol. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   case SPSEC_REG_INTEGRATOR_KEY:
     key_index = 2;
     break;
@@ -67,12 +68,14 @@ register_validate_key_installation_sequence(Participant *participant_ptr,
     return SPSEC_SUCCESS;
   }
 
-  // Check if key is already set (write-once protection for Provisioning and
-  // Integrator keys)
-  if (register_is_key_set(participant_ptr, key_index)) {
-    LOG_ERROR(logger_name_ptr, "Key register 0x%02x is write-once and already set",
-              reg);
-    return SPSEC_ERROR_KEY_ALREADY_SET;
+  // Integrator Key: 1-time write without Provisioning Key, mutable with it.
+  bool is_prov_installed = register_is_key_set(participant_ptr, 1);
+  if (!is_prov_installed) {
+    if (register_is_key_set(participant_ptr, 2)) {
+      LOG_ERROR(logger_name_ptr,
+                "Integrator Key is write-once when Provisioning Key is not installed");
+      return SPSEC_ERROR_KEY_ALREADY_SET;
+    }
   }
 
   // Check if Key ID was properly erased (set to FFFFFFFFh) before writing key
@@ -105,9 +108,7 @@ signed char register_check_access(Participant *participant_ptr, uint8_t reg,
                 reg);
       return SPSEC_ERROR_REGISTER_WRITE_ONLY;
     }
-    // Key pre-shared salts (30h-3Fh) are also never readable (SPsec302
-    // §2.3.2: same access type as their key, write-then-immutable). Used to
-    // fall through to SPSEC_SUCCESS, letting a Zero Key session read them.
+    // Pre-shared salts (30h-3Fh) are write-only and never readable.
     if (reg >= 0x30 && reg <= 0x3F) {
       LOG_ERROR(logger_name_ptr, "Register 0x%02x is write-only and cannot be read",
                 reg);
@@ -121,9 +122,7 @@ signed char register_check_access(Participant *participant_ptr, uint8_t reg,
                 reg);
       return SPSEC_ERROR_REGISTER_WRITE_ONLY;
     }
-    // Zero Key session is unauthenticated (anyone can open one), so
-    // SPsec201 §2.4 restricts its reads to discovery/identity registers
-    // only - not general register access like higher key selectors get.
+    // Zero Key sessions are unauthenticated; restrict reads to discovery.
     if (current_key_selector == KEY_SELECTOR_ZERO) {
       switch (reg) {
       case SPSEC_REG_STATUS:               // 50h - liveness / security state
@@ -146,75 +145,103 @@ signed char register_check_access(Participant *participant_ptr, uint8_t reg,
     return SPSEC_SUCCESS;
   }
 
+  bool is_prov_installed = register_is_key_set(participant_ptr, 1);
+
+  // Rule 3: If provisioning key is installed, Zero Key session cannot write anything, only read.
+  if (current_key_selector == KEY_SELECTOR_ZERO && is_prov_installed) {
+    LOG_ERROR(logger_name_ptr,
+              "Zero Key session is read-only when Provisioning Key is installed");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+  }
+
   // Check write permissions
   switch (reg) {
   // Key registers - write-only, conditional
   case SPSEC_REG_PROVISIONING_KEY:
-    if (current_key_selector != KEY_SELECTOR_ZERO) {
-      LOG_ERROR(logger_name_ptr, "Provisioning Key can only be written via Zero Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
-    }
-    return register_validate_key_installation_sequence(participant_ptr, reg);
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key cannot be written via session. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   case SPSEC_REG_INTEGRATOR_KEY:
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING) {
-      LOG_ERROR(logger_name_ptr, "Integrator Key requires Provisioning Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+    if (is_prov_installed) {
+      // Rule 4: If provisioning key installed - integrator key can be changed only via provisioning key session and integrator key session.
+      if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
+          current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key requires Provisioning or Integrator Key session when Provisioning Key is installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
+    } else {
+      // Rule 1 & 5: If provisioning key is not installed, zero key should allow to write integrator key but only one time.
+      if (current_key_selector != KEY_SELECTOR_ZERO) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key can only be written via Zero Key session when Provisioning Key is not installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
     }
     return register_validate_key_installation_sequence(participant_ptr, reg);
   case SPSEC_REG_SEED_KEY:
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
-        current_key_selector != KEY_SELECTOR_INTEGRATOR) {
-      LOG_ERROR(logger_name_ptr, "Seed Key requires Provisioning or Integrator Key session");
+    // Rule 2: Seed Key write allowed only by Integrator key session use.
+    if (current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+      LOG_ERROR(logger_name_ptr, "Seed Key requires Integrator Key session");
       return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
     }
     return register_validate_key_installation_sequence(participant_ptr, reg);
 
   // Key salt registers - write-only, conditional
   case SPSEC_REG_PROVISIONING_KEY_SALT:
-    if (current_key_selector != KEY_SELECTOR_ZERO) {
-      LOG_ERROR(logger_name_ptr, "Provisioning Key Salt can only be written via Zero Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
-    }
-    return register_validate_key_installation_sequence(participant_ptr, reg - SPSEC_REG_KEY_SALT_TO_KEY_OFFSET);
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key Salt cannot be written via session. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   case SPSEC_REG_INTEGRATOR_KEY_SALT:
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING) {
-      LOG_ERROR(logger_name_ptr, "Integrator Key Salt requires Provisioning Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+    if (is_prov_installed) {
+      if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
+          current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key Salt requires Provisioning or Integrator Key session when Provisioning Key is installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
+    } else {
+      if (current_key_selector != KEY_SELECTOR_ZERO) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key Salt can only be written via Zero Key session when Provisioning Key is not installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
     }
     return register_validate_key_installation_sequence(participant_ptr, reg - SPSEC_REG_KEY_SALT_TO_KEY_OFFSET);
   case SPSEC_REG_SEED_KEY_SALT:
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
-        current_key_selector != KEY_SELECTOR_INTEGRATOR) {
-      LOG_ERROR(logger_name_ptr, "Seed Key Salt requires Provisioning or Integrator Key session");
+    // Rule 2: Seed Key Salt requires Integrator Key session
+    if (current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+      LOG_ERROR(logger_name_ptr, "Seed Key Salt requires Integrator Key session");
       return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
     }
     return register_validate_key_installation_sequence(participant_ptr, reg - SPSEC_REG_KEY_SALT_TO_KEY_OFFSET);
 
   // Key ID registers - write access follows the same hierarchy as the key itself
   case SPSEC_REG_PROVISIONING_KEY_ID:
-    // Write-once: same access rule as the Provisioning Key (Zero Key session only,
-    // and only before the key is installed)
-    if (current_key_selector != KEY_SELECTOR_ZERO) {
-      LOG_ERROR(logger_name_ptr, "Provisioning Key ID can only be written via Zero Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
-    }
-    // Enforce write-once here too: this used to return success unconditionally,
-    // letting any Zero Key session rewrite an already-provisioned device's
-    // reported key ID and break configurator inventory/key selection.
-    return register_validate_key_installation_sequence(participant_ptr,
-                                                       SPSEC_REG_PROVISIONING_KEY);
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key ID cannot be written via session; must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   case SPSEC_REG_INTEGRATOR_KEY_ID:
-    // Writing the Integrator Key ID requires a Provisioning Key session
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING) {
-      LOG_ERROR(logger_name_ptr, "Integrator Key ID requires Provisioning Key session");
-      return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+    if (is_prov_installed) {
+      if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
+          current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key ID requires Provisioning or Integrator Key session when Provisioning Key is installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
+    } else {
+      if (current_key_selector != KEY_SELECTOR_ZERO) {
+        LOG_ERROR(logger_name_ptr,
+                  "Integrator Key ID can only be written via Zero Key session when Provisioning Key is not installed");
+        return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+      }
     }
-    return SPSEC_SUCCESS;
+    return register_validate_key_installation_sequence(participant_ptr,
+                                                       SPSEC_REG_INTEGRATOR_KEY);
   case SPSEC_REG_SEED_KEY_ID:
-    // Writing the Seed Key ID requires a Provisioning or Integrator Key session
-    if (current_key_selector != KEY_SELECTOR_PROVISIONING &&
-        current_key_selector != KEY_SELECTOR_INTEGRATOR) {
-      LOG_ERROR(logger_name_ptr, "Seed Key ID requires Provisioning or Integrator Key session");
+    // Rule 2: Seed Key ID requires Integrator Key session
+    if (current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+      LOG_ERROR(logger_name_ptr, "Seed Key ID requires Integrator Key session");
       return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
     }
     return SPSEC_SUCCESS;
@@ -231,12 +258,11 @@ signed char register_check_access(Participant *participant_ptr, uint8_t reg,
     LOG_ERROR(logger_name_ptr, "Register 0x%02x is read-only", reg);
     return SPSEC_ERROR_REGISTER_READ_ONLY;
 
-  // Write-only registers
+  // Write-only registers (Rule 2: allowed only by Integrator key session use)
   case SPSEC_REG_CODE_UPDATE_FILE:
   case SPSEC_REG_CAN_FD_BIT_RATE:
-    // Accessible from any non-Zero-Key session (Zero Key cannot write config)
-    if (current_key_selector == KEY_SELECTOR_ZERO) {
-      LOG_ERROR(logger_name_ptr, "Register 0x%02x cannot be written via Zero Key session", reg);
+    if (current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+      LOG_ERROR(logger_name_ptr, "Register 0x%02x requires Integrator Key session", reg);
       return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
     }
     return SPSEC_SUCCESS;
@@ -250,13 +276,13 @@ signed char register_check_access(Participant *participant_ptr, uint8_t reg,
     }
     return SPSEC_SUCCESS;
 
-  // Read-write configuration registers
+  // Read-write configuration registers (Rule 2: allowed only by Integrator key session use)
   case SPSEC_REG_PARTICIPANT_ID:
   case SPSEC_REG_SECURE_HEARTBEAT_TIMING:
   case SPSEC_REG_SECURE_HEARTBEAT_MONITOR:
   case SPSEC_REG_SYNC_ROLE_ACTIVATION:
-    if (current_key_selector == KEY_SELECTOR_ZERO) {
-      LOG_ERROR(logger_name_ptr, "Configuration registers cannot be written via Zero Key session");
+    if (current_key_selector != KEY_SELECTOR_INTEGRATOR) {
+      LOG_ERROR(logger_name_ptr, "Configuration register 0x%02x requires Integrator Key session", reg);
       return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
     }
     return SPSEC_SUCCESS;

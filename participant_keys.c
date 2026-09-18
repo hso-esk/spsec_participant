@@ -88,7 +88,7 @@ unsigned char get_required_ts_parts(const uint8_t timestamp_le8_ptr[8],
   return 0;
 }
 
-// Store a (possibly new) csalt, clearing the ts_part cache on an actual change.
+// Store new csalt and clear derived key cache on change.
 void communication_keys_set_csalt(CommunicationKeys *comm_keys_ptr,
                                   const uint8_t new_csalt[4]) {
   if (!comm_keys_ptr || !new_csalt)
@@ -169,9 +169,7 @@ signed char communication_keys_update(CommunicationKeys *comm_keys_ptr,
     if (rc_trans != 0)
       return -3;
 
-    // Determine which transition timestamp to use for even key
-    // Based on get_required_ts_parts logic: if last_is_odd, even uses N_next,
-    // else uses N_last
+    // Determine transition timestamp for even communication key.
     bool last_is_odd = (m_last & 1) != 0;
     uint64_t even_transition_ts = last_is_odd ? N_next : N_last;
 
@@ -198,9 +196,7 @@ signed char communication_keys_update(CommunicationKeys *comm_keys_ptr,
     if (rc_trans != 0)
       return -3;
 
-    // Determine which transition timestamp to use for odd key
-    // Based on get_required_ts_parts logic: if last_is_odd, odd uses N_last,
-    // else uses N_next
+    // Determine transition timestamp for odd communication key.
     bool last_is_odd = (m_last & 1) != 0;
     uint64_t odd_transition_ts = last_is_odd ? N_last : N_next;
 

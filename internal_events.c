@@ -31,9 +31,7 @@ static signed char send_internal_event_can(CommChannel *channel_ptr,
     return -1;
   }
 
-  // SPsec302 V40 Section 7: CAN ID format
-  // Priority 6, bit 25 set, CPMT_INTERN_EVT, participant_id (source addressing,
-  // bit 7 = 0)
+  // Build CAN ID for internal event message.
   uint32_t can_id =
       INTERNAL_EVENT_BASE_ID | (CPMT_INTERN_EVT << 8) | (participant_id & 0x7F);
 

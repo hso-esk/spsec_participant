@@ -47,6 +47,8 @@ typedef struct {
   uint16_t broadcast_offset;
   bool csalt_generated;                      // True if csalt has been generated
   spsec_csalt_regen_mode_t csalt_regen_mode; // When to regenerate csalt
+  // Highest sync timestamp applied in current epoch to prevent replay.
+  uint64_t broadcast_high_watermark;
 } ParticipantTimeSync;
 
 typedef struct {
@@ -149,9 +151,7 @@ void participant_destroy(Participant *participant_ptr);
 // Start the main processing loop; does not return under normal operation.
 spsec_ret_t participant_start_main_loop(Participant *participant_ptr);
 
-// Request a graceful shutdown of the main/state loops. Async-signal-safe
-// (sets a sig_atomic_t), so it's callable from a signal handler; every loop
-// polls participant_shutdown_requested() and unwinds into participant_destroy().
+// Request graceful shutdown of participant loops (async-signal-safe).
 void participant_request_stop(void);
 
 // True once participant_request_stop() has been called.

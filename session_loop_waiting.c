@@ -146,11 +146,12 @@ signed char participant_run_waiting_loop(Participant *participant_ptr) {
                    "Time sync role: reusing csalt drawn at power-up "
                    "(--csalt-regen powerup)");
         }
-        // The Sync role owns the timer, so reaching here IS its own sync;
-        // mirror the client path so it can bridge its own data-plane traffic.
+        // Sync role owns timer; mark synchronized and record timestamp.
         participant_ptr->timesync.is_synchronized = true;
         participant_ptr->timesync.last_successful =
             timer_get_current_time_us(&participant_ptr->timer);
+        // New epoch: reset forward-only broadcast watermark.
+        participant_ptr->timesync.broadcast_high_watermark = 0;
         participant_state_transition(participant_ptr,
                                      SPSEC_EVENT_SECURITY_ESTABLISHED);
         return 0;

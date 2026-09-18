@@ -18,7 +18,7 @@
 signed char communication_keys_update(CommunicationKeys *comm_keys_ptr,
                                       uint8_t *timestamp_ptr);
 
-// Store a (possibly new) csalt, clearing the derived-key cache on change.
+// Store new csalt and invalidate cached communication keys.
 void communication_keys_set_csalt(CommunicationKeys *comm_keys_ptr,
                                   const uint8_t new_csalt[4]);
 

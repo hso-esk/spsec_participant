@@ -190,9 +190,7 @@ signed char participant_check_heartbeat_timing(Participant *participant_ptr) {
   return 0;
 }
 
-// Flag monitored participants that missed heartbeats past the 2.5x window.
-// NOTE: assumes ALL nodes share the local cycle time (register 0x61) -
-// heterogeneous heartbeat cycles aren't supported and will misdetect.
+// Flag monitored participants that missed heartbeats past timeout window.
 signed char participant_check_heartbeat_timeouts(Participant *participant_ptr) {
   uint64_t current_time = timer_get_current_time_us(&participant_ptr->timer);
   uint32_t cycle_ms =
@@ -209,9 +207,7 @@ signed char participant_check_heartbeat_timeouts(Participant *participant_ptr) {
     }
     uint64_t last_seen = participant_ptr->heartbeat.last_received[i];
     if (last_seen == 0) {
-      // First check for this monitored node (never heard from it yet, e.g.
-      // absent from startup or just added to the monitor list): arm the timeout
-      // window from now so a node that is dead-from-start is still detected.
+      // Arm initial timeout window for newly monitored nodes.
       participant_ptr->heartbeat.last_received[i] = current_time;
       continue;
     }

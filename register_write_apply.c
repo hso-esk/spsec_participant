@@ -28,11 +28,18 @@ static const char *logger_name_ptr = "register_write_apply";
 // Store a crypto key into the participant's key inventory.
 spsec_ret_t apply_key(Participant *participant_ptr, uint8_t reg_index,
                       uint8_t *data_ptr) {
-  // Write-once protection: Provisioning (index 1) and Integrator (index 2) keys
-  if (reg_index == 1 || reg_index == 2) {
+  // Provisioning key (reg_index 1) cannot be written via protocol (manufacturer only)
+  if (reg_index == 1) {
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key cannot be written via protocol. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+  }
+
+  bool is_prov_installed = register_is_key_set(participant_ptr, 1);
+  // Integrator key (index 2) is write-once only if Provisioning key is NOT installed
+  if (reg_index == 2 && !is_prov_installed) {
     if (register_is_key_material_set(participant_ptr, reg_index)) {
-      LOG_ERROR(logger_name_ptr, "Key material at index %u is write-once and already set",
-                reg_index);
+      LOG_ERROR(logger_name_ptr, "Integrator Key is write-once when Provisioning Key is not installed");
       return SPSEC_ERROR_KEY_ALREADY_SET;
     }
   }
@@ -79,6 +86,11 @@ spsec_ret_t apply_key(Participant *participant_ptr, uint8_t reg_index,
 // Store a salt value in the participant's key store.
 spsec_ret_t apply_salt(Participant *participant_ptr, uint8_t salt_index,
                        uint8_t *data_ptr) {
+  if (salt_index == 1) {
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key Salt cannot be written via protocol. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+  }
   if (participant_ptr->comm_keys.spsec_salt[salt_index] == NULL) {
     LOG_INFO(logger_name_ptr, "Salt not initialized, initializing now");
     participant_ptr->comm_keys.spsec_salt[salt_index] =
@@ -116,10 +128,17 @@ spsec_ret_t apply_key_id(Participant *participant_ptr, uint8_t reg_index,
     return SPSEC_ERROR_KEY_INVALID_ID;
   }
 
-  if (reg_index == 1 || reg_index == 2) {
+  // Provisioning key ID (reg_index 1) cannot be written via protocol (manufacturer only)
+  if (reg_index == 1) {
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key ID cannot be written via protocol; must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
+  }
+
+  bool is_prov_installed = register_is_key_set(participant_ptr, 1);
+  if (reg_index == 2 && !is_prov_installed) {
     if (register_is_key_set(participant_ptr, reg_index)) {
-      LOG_ERROR(logger_name_ptr, "Key ID at index %u is write-once and already set",
-                reg_index);
+      LOG_ERROR(logger_name_ptr, "Integrator Key ID is write-once when Provisioning Key is not installed");
       return SPSEC_ERROR_KEY_ALREADY_SET;
     }
   }
@@ -130,10 +149,8 @@ spsec_ret_t apply_key_id(Participant *participant_ptr, uint8_t reg_index,
     participant_ptr->comm_keys.spsec_keys[reg_index] =
         spseckey_new(key_id, zero_key);
   } else {
-    if ((reg_index == 1 || reg_index == 2) &&
-        register_is_key_set(participant_ptr, reg_index)) {
-      LOG_ERROR(logger_name_ptr, "Cannot overwrite write-once key ID at index %u",
-                reg_index);
+    if (reg_index == 2 && !is_prov_installed && register_is_key_set(participant_ptr, reg_index)) {
+      LOG_ERROR(logger_name_ptr, "Cannot overwrite write-once key ID at index 2");
       return SPSEC_ERROR_KEY_ALREADY_SET;
     }
     spseckey_set_id(participant_ptr->comm_keys.spsec_keys[reg_index], key_id);

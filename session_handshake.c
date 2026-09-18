@@ -212,9 +212,7 @@ participant_process_client_finished(Participant *participant_ptr,
         msg_ptr->participant_id, participant_ptr->participant_id);
     return SPSEC_STATUS_MSG_IGNORED;
   }
-  // A ClientFinished is only meaningful after a ClientHello allocated the
-  // session auth-tag context. Without this guard an unsolicited ClientFinished
-  // dereferences a NULL pointer and crashes the participant.
+  // Validate session auth context exists before processing ClientFinished.
   if (!participant_ptr->session.auth_tag_data_ptr) {
     LOG_WARNING(logger_name_ptr,
                 "ClientFinished with no active session (no ClientHello) - "
@@ -233,9 +231,7 @@ participant_process_client_finished(Participant *participant_ptr,
   LOG_DEBUG(logger_name_ptr,
             "ClientFinished: session_cnt before increment: %u (0x%08x)",
             participant_ptr->session.cnt, participant_ptr->session.cnt);
-  // The sender advanced its counter before sending; validate against cnt+1 but
-  // only commit the increment once the tag verifies, so a forged/bad-tag
-  // ClientFinished cannot desynchronize the counter from the legitimate peer.
+  // Commit counter increment only after tag verification succeeds.
   uint32_t validated_cnt = participant_ptr->session.cnt + 1;
   LOG_DEBUG(logger_name_ptr, "ClientFinished: validating against cnt %u (0x%08x)",
             validated_cnt, validated_cnt);
@@ -286,9 +282,7 @@ participant_process_client_finished(Participant *participant_ptr,
          msg_ptr->auth_tag, AUTH_TAG_SIZE);
   LOG_INFO(logger_name_ptr, "Auth tag in Client Finished message is valid");
 
-  // Don't reset lower-priority keys here - it used to wipe the Provisioning
-  // key on every handshake (breaks SPsec102/302 §2.3.6). Erasure now only
-  // happens in handle_manufacturer_reset_logic().
+  // Retain existing keys across session handshakes.
   return SPSEC_SUCCESS;
 }
 

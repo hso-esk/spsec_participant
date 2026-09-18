@@ -67,9 +67,7 @@ static spsec_ret_t try_decrypt_with_le_assoc(Participant *participant_ptr,
             "addr=%08x len=%u key_ptr=%s auth_only=%d",
             (unsigned)msg_ptr->address, (unsigned)msg_ptr->secure_data_len,
             key_label_ptr, participant_ptr->auth_only_mode);
-  // LOG_ARRAY, not a fixed %02x chain: a hardcoded width once read past a
-  // shrunk DATA_AAD_LEN buffer (OOB stack read). Not secret data, so
-  // LOG_ARRAY not LOG_SECRET is correct.
+  // Log associated data array for diagnostics.
   LOG_ARRAY(LOG_LEVEL_DEBUG, logger_name_ptr, "AssocData(LE):", assoc_data_le_ptr,
            DATA_AAD_LEN);
   LOG_SECRET(logger_name_ptr, "Ciphertext to decrypt:",
@@ -167,9 +165,7 @@ spsec_ret_t participant_decrypt_spsec_appdata(
   LOG_SECRET(logger_name_ptr, "Comm odd_key:",
             participant_ptr->comm_keys.odd_key, KEY_LEN);
 
-  // Guard the payload-length subtraction below: padding_size comes from the
-  // frame (0-15) and must not exceed secure_data_len, else secure_data_len -
-  // padding_size underflows to a huge size_t and over-reads the plaintext.
+  // Validate padding size does not exceed secured data length.
   if (msg_ptr->padding_size > msg_ptr->secure_data_len) {
     LOG_ERROR(logger_name_ptr,
               "Invalid padding_size %u for secure_data_len %u - rejecting",

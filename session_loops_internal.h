@@ -24,7 +24,7 @@
 void process_secure_messages(Participant *participant_ptr);
 void process_insecure_messages(Participant *participant_ptr);
 
-// Decrypts one Sync Time broadcast against the rolling comm keys
+// Decrypts one Sync Time broadcast against rolling communication keys.
 signed char
 participant_handle_timesync_broadcast(Participant *participant_ptr,
                                       SPsecSyncTimeBroadcastMessage *tsb_msg_ptr);

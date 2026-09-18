@@ -112,9 +112,7 @@ register_apply_write_segment(Participant *participant_ptr,
            participant_ptr->state_info.prepared_write_register);
   LOG_SECRET(logger_name_ptr, "Write segment data:", msg_ptr->data_ptr, msg_ptr->data_len);
 
-  // Key/salt registers copy a fixed KEY_LEN/SALT_LEN from data_ptr; a short
-  // segment would over-read the (data_len-sized) decrypt buffer into key
-  // material. The other registers validate their own lengths in-case below.
+  // Validate segment length matches fixed key or salt length.
   switch (participant_ptr->state_info.prepared_write_register) {
   case SPSEC_REG_PROVISIONING_KEY:
   case SPSEC_REG_INTEGRATOR_KEY:
@@ -140,13 +138,9 @@ register_apply_write_segment(Participant *participant_ptr,
 
   switch (participant_ptr->state_info.prepared_write_register) {
   case SPSEC_REG_PROVISIONING_KEY: {
-    spsec_ret_t ret = apply_key(participant_ptr, 1, msg_ptr->data_ptr);
-    if (ret != SPSEC_SUCCESS) {
-      LOG_ERROR(logger_name_ptr, "Failed to apply provisioning key: %d", ret);
-      return ret;
-    }
-    LOG_INFO(logger_name_ptr, "Provisioning key applied");
-    break;
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key cannot be written via protocol. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   }
   case SPSEC_REG_INTEGRATOR_KEY: {
     spsec_ret_t ret = apply_key(participant_ptr, 2, msg_ptr->data_ptr);
@@ -167,13 +161,9 @@ register_apply_write_segment(Participant *participant_ptr,
     break;
   }
   case SPSEC_REG_PROVISIONING_KEY_SALT: {
-    spsec_ret_t ret = apply_salt(participant_ptr, 1, msg_ptr->data_ptr);
-    if (ret != SPSEC_SUCCESS) {
-      LOG_ERROR(logger_name_ptr, "Failed to apply provisioning salt: %d", ret);
-      return ret;
-    }
-    LOG_INFO(logger_name_ptr, "Provisioning salt applied");
-    break;
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key Salt cannot be written via protocol. It must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   }
   case SPSEC_REG_INTEGRATOR_KEY_SALT: {
     spsec_ret_t ret = apply_salt(participant_ptr, 2, msg_ptr->data_ptr);
@@ -194,14 +184,9 @@ register_apply_write_segment(Participant *participant_ptr,
     break;
   }
   case SPSEC_REG_PROVISIONING_KEY_ID: {
-    spsec_ret_t ret =
-        apply_key_id(participant_ptr, 1, msg_ptr->data_ptr, msg_ptr->data_len);
-    if (ret != SPSEC_SUCCESS) {
-      LOG_ERROR(logger_name_ptr, "Failed to apply provisioning key id: %d", ret);
-      return ret;
-    }
-    LOG_INFO(logger_name_ptr, "Provisioning key id applied");
-    break;
+    LOG_ERROR(logger_name_ptr,
+              "Provisioning Key ID cannot be written via protocol; must be added manually by device manufacturer");
+    return SPSEC_ERROR_REGISTER_ACCESS_DENIED;
   }
   case SPSEC_REG_INTEGRATOR_KEY_ID: {
     spsec_ret_t ret =

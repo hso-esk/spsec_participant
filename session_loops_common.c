@@ -25,6 +25,7 @@
 
 static const char *logger_name_ptr = "part_session_common";
 
+// Decrypts and handles an incoming sync time broadcast message.
 signed char
 participant_handle_timesync_broadcast(Participant *participant_ptr,
                                       SPsecSyncTimeBroadcastMessage *tsb_msg_ptr) {
@@ -86,6 +87,7 @@ participant_handle_timesync_broadcast(Participant *participant_ptr,
                                           SPSEC_SYNC_REFR_TIMEOUT);
         // Must clear this so the WAITING loop actually re-requests time sync.
         participant_ptr->timesync.is_synchronized = false;
+        participant_ptr->timesync.broadcast_high_watermark = 0;
         participant_state_transition(participant_ptr,
                                      SPSEC_EVENT_SECURITY_ABORT);
       }
@@ -119,14 +121,24 @@ participant_handle_timesync_broadcast(Participant *participant_ptr,
       LOG_DEBUG_ARRAY(logger_name_ptr, "Adjusted timestamp_ptr:",
                       adjusted_ts, sizeof(adjusted_ts));
 
-      timer_set_timestamp(&participant_ptr->timer, adjusted_ts);
-      LOG_DEBUG(logger_name_ptr, "Attempt to set timestamp_ptr");
+      // Reject broadcast timestamps not strictly newer than last applied.
+      uint64_t broadcast_ts = bytes_to_u64_le(adjusted_ts);
+      if (broadcast_ts <= participant_ptr->timesync.broadcast_high_watermark) {
+        LOG_INFO(logger_name_ptr,
+                 "Dropping non-forward broadcast timestamp "
+                 "(received=%llu watermark=%llu)",
+                 (unsigned long long)broadcast_ts,
+                 (unsigned long long)
+                     participant_ptr->timesync.broadcast_high_watermark);
+      } else {
+        participant_ptr->timesync.broadcast_high_watermark = broadcast_ts;
+        timer_set_timestamp(&participant_ptr->timer, adjusted_ts);
+        LOG_DEBUG(logger_name_ptr, "Broadcast timestamp applied");
 
-      // A verified broadcast counts as a successful sync too - without this,
-      // the refresh watchdog fired 60s after onboarding regardless of
-      // subsequently verified broadcasts.
-      participant_ptr->timesync.last_successful =
-          timer_get_current_time_us(&participant_ptr->timer);
+        // Verified broadcast counts as successful sync and resets watchdog.
+        participant_ptr->timesync.last_successful =
+            timer_get_current_time_us(&participant_ptr->timer);
+      }
     }
   // participant_decrypt_spsec_appdata allocates plaintext on success; free it
   // (on the failure paths above it already freed and returned).
@@ -173,9 +185,7 @@ static void
 handle_msg_timesync_broadcast(Participant *participant_ptr,
                               SPsecSyncTimeBroadcastMessage *msg_ptr) {
   LOG_INFO(logger_name_ptr, "Received sync time broadcast");
-  // A failure here is not fatal to the loop - the handler has already decided
-  // whether it warrants a Security Abort (Sync restart) or is just a bad
-  // frame to drop. Log it rather than discarding the result silently.
+  // Log non-fatal broadcast handling failure and continue.
   if (participant_handle_timesync_broadcast(participant_ptr, msg_ptr) < 0) {
     LOG_DEBUG(logger_name_ptr, "Sync time broadcast could not be processed");
   }
@@ -264,9 +274,7 @@ void process_secure_messages(Participant *participant_ptr) {
         &participant_ptr->dll_event_ctx, can_id, current_time);
     if (dll_event != 0) {
       participant_handle_security_event(participant_ptr, dll_event);
-      // Own/duplicate frame looped back (e.g. vcan loopback): drop it here
-      // instead of processing, or the resulting event report would loop back
-      // too and retrigger this guard forever.
+      // Drop looped-back own frame to prevent event re-triggering.
       spsecappdata_free(sec_msg_ptr->msg_content_ptr);
       spsecmessage_free(sec_msg_ptr);
       return;
@@ -306,19 +314,17 @@ void process_insecure_messages(Participant *participant_ptr) {
         &participant_ptr->dll_event_ctx, can_id, current_time);
     if (dll_event != 0) {
       participant_handle_security_event(participant_ptr, dll_event);
-      // Own/duplicate frame looped back (e.g. vcan loopback): drop it here
-      // instead of bridging it, or the resulting event report would loop
-      // back too and retrigger this guard forever.
+      // Drop looped-back own frame to prevent bridging loop.
       appdata_free(insec_msg_ptr->msg_content_ptr);
       spsecmessage_free(insec_msg_ptr);
       return;
     }
   }
 
-  // Never bridge data-plane frames before the initial time sync completes
+  // Drop data-plane frames until initial time synchronization completes.
   if (!participant_ptr->timesync.is_synchronized) {
     LOG_DEBUG(logger_name_ptr,
-             "Insecure RX dropped: not yet time-synchronized");
+             "Insecure RX dropped: not yet time-synchronized (SS625)");
     appdata_free(insec_msg_ptr->msg_content_ptr);
     spsecmessage_free(insec_msg_ptr);
     return;
@@ -345,14 +351,7 @@ static signed char
 participant_send_timesync_broadcast(Participant *participant_ptr,
                                     uint8_t *timestamp_ptr) {
   SPsecSyncTimeBroadcastMessage *msg_ptr = spsecsynctimebroadcast_new(0);
-  if (!msg_ptr) {
-    LOG_ERROR(logger_name_ptr, "Failed to allocate sync time broadcast message");
-    return -1;
-  }
-  if (set_spsecsynctimebroadcast_timestamp(msg_ptr, timestamp_ptr) != 0) {
-    spsecsynctimebroadcast_free(msg_ptr);
-    return -1;
-  }
+  set_spsecsynctimebroadcast_timestamp(msg_ptr, timestamp_ptr);
   set_broadcast_timesync_address(msg_ptr->app_data_ptr);
   signed char ret =
       participant_handle_secure_message(participant_ptr, msg_ptr->app_data_ptr);

@@ -90,11 +90,6 @@ signed char participant_process_spsec_appdata(Participant *participant_ptr,
   }
   AppData *out_msg_ptr =
       appdata_new(msg_ptr->address, plaintext_ptr, plaintext_len);
-  if (!out_msg_ptr) {
-    LOG_ERROR(logger_name_ptr, "Failed to allocate AppData for received message");
-    free(plaintext_ptr);
-    return -4;
-  }
 
   LOG_CRITICAL(logger_name_ptr, "Received app data_ptr from: 0x%08x",
                out_msg_ptr->address);
@@ -129,26 +124,13 @@ static spsec_ret_t construct_aead_nonce(Participant *participant_ptr,
   uint8_t timestamp[8];
   timer_get_timestamp(&participant_ptr->timer, timestamp);
 
-  // SPsec nonce_ptr reuse prevention:
-  // If the previous transmission used the same timestamp and low 16 bits of CAN ID,
-  // wait until the timer advances to the next tick so the AEAD nonce_ptr is guaranteed unique.
-  // Bounded: a stalled timer must not hang the participant forever.
-  #define NONCE_WAIT_MAX_ATTEMPTS 1000 // 1000 * 50us = 50ms deadline
-  int nonce_wait_attempts = 0;
+  // Ensure timer advances before transmit to prevent nonce reuse.
   while (memcmp(timestamp, participant_ptr->last_tx_timestamp, 8) == 0 &&
          (base_can_id & 0xFFFF) == (participant_ptr->last_tx_can_id & 0xFFFF)) {
-    if (++nonce_wait_attempts > NONCE_WAIT_MAX_ATTEMPTS) {
-      LOG_ERROR(logger_name_ptr,
-                "Timer did not advance after %d attempts - aborting send "
-                "to avoid nonce_ptr reuse",
-                NONCE_WAIT_MAX_ATTEMPTS);
-      return SPSEC_ERROR_TIMEOUT;
-    }
     struct timespec ts = {0, 50000}; // 50 us
     nanosleep(&ts, NULL);
     timer_get_timestamp(&participant_ptr->timer, timestamp);
   }
-  #undef NONCE_WAIT_MAX_ATTEMPTS
   memcpy(participant_ptr->last_tx_timestamp, timestamp, 8);
   participant_ptr->last_tx_can_id = base_can_id;
 

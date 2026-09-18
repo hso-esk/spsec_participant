@@ -148,7 +148,7 @@ signed char participant_process_mtls_auth_time(Participant *participant_ptr,
   if (ret < 0)
     return ret;
 
-  // Store csalt_ptr for communication key derivation
+  // Store csalt and clear key cache so new keys are derived.
   communication_keys_set_csalt(&participant_ptr->comm_keys, msg_ptr->csalt);
   LOG_SECRET(logger_name_ptr, "Stored csalt_ptr for communication key derivation:",
             participant_ptr->comm_keys.csalt, 4);
@@ -180,6 +180,8 @@ signed char participant_process_mtls_auth_time(Participant *participant_ptr,
   participant_ptr->timesync.is_synchronized = true;
   participant_ptr->timesync.last_successful =
       timer_get_current_time_us(&participant_ptr->timer);
+  // New epoch: allow broadcasts from any timestamp again.
+  participant_ptr->timesync.broadcast_high_watermark = 0;
   free(participant_ptr->timesync.last_random_ptr);
   participant_ptr->timesync.last_random_ptr = NULL;
   LOG_INFO(logger_name_ptr, "Time synchronized successfully");
@@ -222,9 +224,7 @@ signed char timesync_process_mtls_auth_time(Participant *participant_ptr,
   LOG_DEBUG_ARRAY(logger_name_ptr, "Generated timestamp_ptr:",
                   timestamp_ptr, sizeof(timestamp_ptr));
 
-  // Use the csalt_ptr that was generated when time sync role entered SECURE state
-  // This ensures all participants use the same csalt_ptr for communication key
-  // derivation
+  // Use csalt generated when time sync role entered SECURE state.
   uint8_t csalt_ptr[4];
   // Ensure valid csalt_ptr is present before responding
   bool csalt_set = false;
